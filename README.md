@@ -126,3 +126,273 @@ user@ubuntu24:~$ uname -r
 user@ubuntu24:~$
 ```
 </details>
+
+## Lesson2
+
+<details>
+<summary>Details</summary>
+
+Домашнее задание: работа с mdadm
+
+Задание
+1. Добавить в виртуальную машину несколько дисков
+2. Собрать RAID-0/1/5/10 на выбор
+3. Сломать и починить RAID
+4. Создать GPT таблицу, пять разделов и смонтировать их в системе.
+
+Добавляем диски, проверяем, очищаем суперблоки:
+```bash
+user@ubuntu24:~$ lsscsi
+[0:0:0:0]    disk    QEMU     QEMU HARDDISK    2.5+  /dev/sda
+[3:0:0:1]    disk    QEMU     QEMU HARDDISK    2.5+  /dev/sdb
+[4:0:0:2]    disk    QEMU     QEMU HARDDISK    2.5+  /dev/sdc
+[5:0:0:3]    disk    QEMU     QEMU HARDDISK    2.5+  /dev/sdd
+[6:0:0:4]    disk    QEMU     QEMU HARDDISK    2.5+  /dev/sde
+[7:0:0:5]    disk    QEMU     QEMU HARDDISK    2.5+  /dev/sdf
+user@ubuntu24:~$ sudo mdadm --zero-superblock --force /dev/sd{b,c,d,e,f}
+mdadm: Unrecognised md component device - /dev/sdb
+mdadm: Unrecognised md component device - /dev/sdc
+mdadm: Unrecognised md component device - /dev/sdd
+mdadm: Unrecognised md component device - /dev/sde
+mdadm: Unrecognised md component device - /dev/sdf
+```
+Суперблоков нет т.к. диски новые и "чистые"
+
+Создаём raid6 и проверяем:
+
+```bash
+user@ubuntu24:~$ sudo mdadm --create --verbose /dev/md0 -l 6 -n 5 /dev/sd{b,c,d,e,f}
+mdadm: layout defaults to left-symmetric
+mdadm: layout defaults to left-symmetric
+mdadm: chunk size defaults to 512K
+mdadm: size set to 1046528K
+mdadm: Defaulting to version 1.2 metadata
+mdadm: array /dev/md0 started.
+user@ubuntu24:~$ sudo cat /proc/mdstat
+Personalities : [raid0] [raid1] [raid4] [raid5] [raid6] [raid10] [linear]
+md0 : active raid6 sdf[4] sde[3] sdd[2] sdc[1] sdb[0]
+      3139584 blocks super 1.2 level 6, 512k chunk, algorithm 2 [5/5] [UUUUU]
+
+unused devices: <none>
+user@ubuntu24:~$ sudo mdadm -D /dev/md0
+/dev/md0:
+           Version : 1.2
+     Creation Time : Mon Jul 13 21:46:44 2026
+        Raid Level : raid6
+        Array Size : 3139584 (2.99 GiB 3.21 GB)
+     Used Dev Size : 1046528 (1022.00 MiB 1071.64 MB)
+      Raid Devices : 5
+     Total Devices : 5
+       Persistence : Superblock is persistent
+
+       Update Time : Mon Jul 13 21:46:49 2026
+             State : clean
+    Active Devices : 5
+   Working Devices : 5
+    Failed Devices : 0
+     Spare Devices : 0
+
+            Layout : left-symmetric
+        Chunk Size : 512K
+
+Consistency Policy : resync
+
+              Name : ubuntu24:0  (local to host ubuntu24)
+              UUID : 13621d63:2e8bedd4:c0df48d5:9f95eaf4
+            Events : 17
+
+    Number   Major   Minor   RaidDevice State
+       0       8       16        0      active sync   /dev/sdb
+       1       8       32        1      active sync   /dev/sdc
+       2       8       48        2      active sync   /dev/sdd
+       3       8       64        3      active sync   /dev/sde
+       4       8       80        4      active sync   /dev/sdf
+```
+Ломаем массив:
+```bash
+user@ubuntu24:~$ sudo mdadm /dev/md0 --fail /dev/sde
+mdadm: set /dev/sde faulty in /dev/md0
+user@ubuntu24:~$ sudo cat /proc/mdstat
+Personalities : [raid0] [raid1] [raid4] [raid5] [raid6] [raid10] [linear]
+md0 : active raid6 sdf[4] sde[3](F) sdd[2] sdc[1] sdb[0]
+      3139584 blocks super 1.2 level 6, 512k chunk, algorithm 2 [5/4] [UUU_U]
+
+unused devices: <none>
+user@ubuntu24:~$ sudo mdadm -D /dev/md0
+/dev/md0:
+           Version : 1.2
+     Creation Time : Mon Jul 13 21:46:44 2026
+        Raid Level : raid6
+        Array Size : 3139584 (2.99 GiB 3.21 GB)
+     Used Dev Size : 1046528 (1022.00 MiB 1071.64 MB)
+      Raid Devices : 5
+     Total Devices : 5
+       Persistence : Superblock is persistent
+
+       Update Time : Mon Jul 13 21:54:59 2026
+             State : clean, degraded
+    Active Devices : 4
+   Working Devices : 4
+    Failed Devices : 1
+     Spare Devices : 0
+
+            Layout : left-symmetric
+        Chunk Size : 512K
+
+Consistency Policy : resync
+
+              Name : ubuntu24:0  (local to host ubuntu24)
+              UUID : 13621d63:2e8bedd4:c0df48d5:9f95eaf4
+            Events : 19
+
+    Number   Major   Minor   RaidDevice State
+       0       8       16        0      active sync   /dev/sdb
+       1       8       32        1      active sync   /dev/sdc
+       2       8       48        2      active sync   /dev/sdd
+       -       0        0        3      removed
+       4       8       80        4      active sync   /dev/sdf
+
+       3       8       64        -      faulty   /dev/sde
+```
+
+Удаляем сломанный диск, затем добавляем его обратно и снаблюдаем ребилд:
+
+```bash
+user@ubuntu24:~$ sudo mdadm /dev/md0 --remove /dev/sde
+mdadm: hot removed /dev/sde from /dev/md0
+user@ubuntu24:~$ sudo mdadm /dev/md0 --add /dev/sde
+mdadm: added /dev/sde
+user@ubuntu24:~$ sudo cat /proc/mdstat
+Personalities : [raid0] [raid1] [raid4] [raid5] [raid6] [raid10] [linear]
+md0 : active raid6 sde[5] sdf[4] sdd[2] sdc[1] sdb[0]
+      3139584 blocks super 1.2 level 6, 512k chunk, algorithm 2 [5/4] [UUU_U]
+      [==============>......]  recovery = 74.9% (784944/1046528) finish=0.0min speed=261648K/sec
+
+unused devices: <none>
+user@ubuntu24:~$ sudo mdadm -D /dev/md0
+/dev/md0:
+           Version : 1.2
+     Creation Time : Mon Jul 13 21:46:44 2026
+        Raid Level : raid6
+        Array Size : 3139584 (2.99 GiB 3.21 GB)
+     Used Dev Size : 1046528 (1022.00 MiB 1071.64 MB)
+      Raid Devices : 5
+     Total Devices : 5
+       Persistence : Superblock is persistent
+
+       Update Time : Mon Jul 13 21:58:49 2026
+             State : clean
+    Active Devices : 5
+   Working Devices : 5
+    Failed Devices : 0
+     Spare Devices : 0
+
+            Layout : left-symmetric
+        Chunk Size : 512K
+
+Consistency Policy : resync
+
+              Name : ubuntu24:0  (local to host ubuntu24)
+              UUID : 13621d63:2e8bedd4:c0df48d5:9f95eaf4
+            Events : 39
+
+    Number   Major   Minor   RaidDevice State
+       0       8       16        0      active sync   /dev/sdb
+       1       8       32        1      active sync   /dev/sdc
+       2       8       48        2      active sync   /dev/sdd
+       5       8       64        3      active sync   /dev/sde
+       4       8       80        4      active sync   /dev/sdf
+```
+Создаём GPT таблицу, разделы и монтируем их:
+
+```bash
+user@ubuntu24:~$ sudo parted -s /dev/md0 mklabel gpt
+user@ubuntu24:~$ sudo parted /dev/md0 mkpart primary ext4 0% 20%
+Information: You may need to update /etc/fstab.
+
+user@ubuntu24:~$ sudo parted /dev/md0 mkpart primary ext4 20% 40%
+Information: You may need to update /etc/fstab.
+
+user@ubuntu24:~$ sudo parted /dev/md0 mkpart primary ext4 40% 60%
+Information: You may need to update /etc/fstab.
+
+user@ubuntu24:~$ sudo parted /dev/md0 mkpart primary ext4 60% 80%
+Information: You may need to update /etc/fstab.
+
+user@ubuntu24:~$ sudo parted /dev/md0 mkpart primary ext4 80% 100%
+Information: You may need to update /etc/fstab.
+
+user@ubuntu24:~$ for i in $(seq 1 5); do sudo mkfs.ext4 /dev/md0p$i;
+> done
+mke2fs 1.47.0 (5-Feb-2023)
+Creating filesystem with 156672 4k blocks and 39200 inodes
+Filesystem UUID: 586c95a8-5e4a-4a2b-a081-713d4dcf2a51
+Superblock backups stored on blocks:
+        32768, 98304
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (4096 blocks): done
+Writing superblocks and filesystem accounting information: done
+
+mke2fs 1.47.0 (5-Feb-2023)
+Creating filesystem with 157056 4k blocks and 39280 inodes
+Filesystem UUID: 9425d9cc-8849-4868-a6c0-6f734e641c0f
+Superblock backups stored on blocks:
+        32768, 98304
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (4096 blocks): done
+Writing superblocks and filesystem accounting information: done
+
+mke2fs 1.47.0 (5-Feb-2023)
+Creating filesystem with 156672 4k blocks and 39200 inodes
+Filesystem UUID: 459810be-d610-4727-ac1c-0406fd30bc56
+Superblock backups stored on blocks:
+        32768, 98304
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (4096 blocks): done
+Writing superblocks and filesystem accounting information: done
+
+mke2fs 1.47.0 (5-Feb-2023)
+Creating filesystem with 157056 4k blocks and 39280 inodes
+Filesystem UUID: 2cb9169e-d760-4f4f-9eea-a98a30317345
+Superblock backups stored on blocks:
+        32768, 98304
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (4096 blocks): done
+Writing superblocks and filesystem accounting information: done
+
+mke2fs 1.47.0 (5-Feb-2023)
+Creating filesystem with 156672 4k blocks and 39200 inodes
+Filesystem UUID: f5aa4a36-2ab8-4d36-92cd-a0b5a03e8a03
+Superblock backups stored on blocks:
+        32768, 98304
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (4096 blocks): done
+Writing superblocks and filesystem accounting information: done
+user@ubuntu24:~$ sudo mkdir -p /raid/part{1,2,3,4,5}
+user@ubuntu24:~$ for i in $(seq 1 5); do sudo mount /dev/md0p$i /raid/part$i; done
+user@ubuntu24:~$ df -hT
+Filesystem                        Type   Size  Used Avail Use% Mounted on
+tmpfs                             tmpfs  197M  1.1M  196M   1% /run
+/dev/mapper/ubuntu--vg-ubuntu--lv ext4   9.8G  4.8G  4.5G  52% /
+tmpfs                             tmpfs  981M     0  981M   0% /dev/shm
+tmpfs                             tmpfs  5.0M     0  5.0M   0% /run/lock
+/dev/sda2                         ext4   1.7G  209M  1.4G  13% /boot
+tmpfs                             tmpfs  197M   12K  197M   1% /run/user/1001
+/dev/md0p1                        ext4   586M   24K  543M   1% /raid/part1
+/dev/md0p2                        ext4   587M   24K  544M   1% /raid/part2
+/dev/md0p3                        ext4   586M   24K  543M   1% /raid/part3
+/dev/md0p4                        ext4   587M   24K  544M   1% /raid/part4
+/dev/md0p5                        ext4   586M   24K  543M   1% /raid/part5
+```
+
+</details>
